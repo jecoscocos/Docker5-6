@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+psycopg2-binary
+python-multipart
+aiosmtplib  # Асинхронная библиотека для работы с SMTP
+imapclient  # Библиотека для работы с IMAP
+python-dotenv  # Для работы с переменными окружения
+websockets  # Для поддержки WebSocket соединений 

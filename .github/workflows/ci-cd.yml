@@ -1,0 +1,214 @@
+name: CI/CD Todo Application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      BACKEND_IMAGE: ${{ secrets.DOCKER_USERNAME }}/todo-backend:latest
+      FRONTEND_IMAGE: ${{ secrets.DOCKER_USERNAME }}/todo-frontend:latest
+      DATABASE_IMAGE: ${{ secrets.DOCKER_USERNAME }}/todo-database:latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      # Линтинг Python кода
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install Python linting tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pylint pytest pytest-asyncio httpx
+          
+      - name: Run Python linting
+        shell: pwsh
+        run: |
+          flake8 ./backend/src --count --max-complexity=10 --max-line-length=127 --statistics
+          pylint ./backend/src --disable=C0111,C0103
+      
+      # Тесты Python бэкенда
+      - name: Run Python tests
+        shell: pwsh
+        run: |
+          cd backend
+          pytest tests/ -v
+      
+      # Линтинг и тесты Frontend
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          
+      - name: Install Frontend dependencies
+        shell: pwsh
+        run: |
+          cd frontend
+          npm install
+          
+      - name: Run Frontend linting
+        shell: pwsh
+        run: |
+          cd frontend
+          npm run lint
+          
+      - name: Run Frontend tests
+        shell: pwsh
+        run: |
+          cd frontend
+          npm test -- --watchAll=false
+      
+      # Create network
+      - name: Create Docker network
+        shell: pwsh
+        run: |
+          docker network create todo-network
+      
+      # Build and test database
+      - name: Build database image
+        shell: pwsh
+        run: |
+          docker build -t $env:DATABASE_IMAGE ./database
+      
+      - name: Run database container
+        shell: pwsh
+        run: |
+          docker run -d --name todo-db --network todo-network -p 5432:5432 $env:DATABASE_IMAGE
+          Start-Sleep -Seconds 10
+      
+      # Тест подключения к базе данных
+      - name: Test database connection
+        shell: pwsh
+        run: |
+          $env:PGPASSWORD = "admin123"
+          $result = docker exec todo-db psql -h localhost -U admin -d tododb -c "\dt"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Database connection test failed"
+            exit 1
+          }
+      
+      # Build and test backend
+      - name: Build backend image
+        shell: pwsh
+        run: |
+          docker build -t $env:BACKEND_IMAGE ./backend
+      
+      - name: Run backend container
+        shell: pwsh
+        run: |
+          docker run -d --name todo-backend --network todo-network -p 8000:8000 -e "DATABASE_URL=postgresql://admin:admin123@todo-db:5432/tododb" $env:BACKEND_IMAGE
+          Start-Sleep -Seconds 10
+      
+      # Расширенное тестирование API
+      - name: Test backend API
+        shell: pwsh
+        run: |
+          # Проверка health check
+          $health = Invoke-WebRequest -Uri "http://localhost:8000/tasks" -Method GET
+          if ($health.StatusCode -ne 200) {
+            Write-Error "Health check failed"
+            exit 1
+          }
+          
+          # Создание тестовой задачи
+          $task = @{
+            title = "Test Task"
+            description = "Test Description"
+            status = "pending"
+          } | ConvertTo-Json
+          
+          $newTask = Invoke-WebRequest -Uri "http://localhost:8000/tasks" -Method POST -Body $task -ContentType "application/json"
+          if ($newTask.StatusCode -ne 200) {
+            Write-Error "Task creation failed"
+            exit 1
+          }
+          
+          $taskId = ($newTask.Content | ConvertFrom-Json).id
+          
+          # Обновление задачи
+          $updateTask = @{
+            title = "Updated Task"
+            description = "Updated Description"
+            status = "completed"
+          } | ConvertTo-Json
+          
+          $updatedTask = Invoke-WebRequest -Uri "http://localhost:8000/tasks/$taskId" -Method PUT -Body $updateTask -ContentType "application/json"
+          if ($updatedTask.StatusCode -ne 200) {
+            Write-Error "Task update failed"
+            exit 1
+          }
+          
+          # Удаление задачи
+          $deleteTask = Invoke-WebRequest -Uri "http://localhost:8000/tasks/$taskId" -Method DELETE
+          if ($deleteTask.StatusCode -ne 200) {
+            Write-Error "Task deletion failed"
+            exit 1
+          }
+          
+          Write-Host "All API tests passed successfully"
+      
+      # Build and test frontend
+      - name: Build frontend image
+        shell: pwsh
+        run: |
+          docker build -t $env:FRONTEND_IMAGE ./frontend
+      
+      - name: Run frontend container
+        shell: pwsh
+        run: |
+          docker run -d --name todo-frontend --network todo-network -p 3000:3000 -e "REACT_APP_API_URL=http://localhost:8000" $env:FRONTEND_IMAGE
+          Start-Sleep -Seconds 10
+      
+      # Тестирование фронтенда
+      - name: Test frontend
+        shell: pwsh
+        run: |
+          # Проверка загрузки главной страницы
+          $response = Invoke-WebRequest -Uri "http://localhost:3000" -Method GET
+          if ($response.StatusCode -ne 200) {
+            Write-Error "Frontend health check failed"
+            exit 1
+          }
+          
+          # Проверка наличия ключевых элементов на странице
+          if ($response.Content -notmatch "todo-app" -or $response.Content -notmatch "task-list") {
+            Write-Error "Frontend content check failed"
+            exit 1
+          }
+          
+          Write-Host "Frontend tests passed successfully"
+      
+      # Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      # Push images to Docker Hub
+      - name: Push images to Docker Hub
+        shell: pwsh
+        run: |
+          docker push $env:BACKEND_IMAGE
+          docker push $env:FRONTEND_IMAGE
+          docker push $env:DATABASE_IMAGE
+      
+      # Cleanup containers
+      - name: Cleanup containers
+        if: always()
+        shell: pwsh
+        run: |
+          docker stop todo-frontend todo-backend todo-db
+          docker rm todo-frontend todo-backend todo-db
+          docker network rm todo-network 

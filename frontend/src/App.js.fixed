@@ -1,0 +1,355 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+function App() {
+    const [tasks, setTasks] = useState([]);
+    const [title, setTitle] = useState('');
+    const [description, setDescription] = useState('');
+    const [editingTask, setEditingTask] = useState(null);
+
+    // Состояния для формы отправки писем
+    const [showEmailForm, setShowEmailForm] = useState(false);
+    const [selectedTaskId, setSelectedTaskId] = useState(null);
+    const [recipientEmail, setRecipientEmail] = useState('');
+    const [emailSubject, setEmailSubject] = useState('');
+    const [emailBody, setEmailBody] = useState('');
+    const [emailStatus, setEmailStatus] = useState(null);
+
+    // Состояния для проверки почты
+    const [emails, setEmails] = useState([]);
+    const [emailProtocol, setEmailProtocol] = useState('imap');
+    const [loadingEmails, setLoadingEmails] = useState(false);
+
+    useEffect(() => {
+        fetchTasks();
+    }, []);
+
+    const fetchTasks = async() => {
+        try {
+            const response = await axios.get(`${API_URL}/tasks`);
+            setTasks(response.data);
+        } catch (error) {
+            console.error('Error fetching tasks:', error);
+        }
+    };
+
+    const handleSubmit = async(e) => {
+        e.preventDefault();
+        try {
+            if (editingTask) {
+                await axios.put(`${API_URL}/tasks/${editingTask.id}`, {
+                    title,
+                    description,
+                    status: editingTask.status
+                });
+                setEditingTask(null);
+            } else {
+                await axios.post(`${API_URL}/tasks`, {
+                    title,
+                    description,
+                    status: 'pending'
+                });
+            }
+            setTitle('');
+            setDescription('');
+            fetchTasks();
+        } catch (error) {
+            console.error('Error submitting task:', error);
+        }
+    };
+
+    const handleDelete = async(id) => {
+        try {
+            await axios.delete(`${API_URL}/tasks/${id}`);
+            fetchTasks();
+        } catch (error) {
+            console.error('Error deleting task:', error);
+        }
+    };
+
+    const handleEdit = (task) => {
+        setEditingTask(task);
+        setTitle(task.title);
+        setDescription(task.description);
+    };
+
+    // Функция для изменения статуса задачи
+    const handleStatusChange = async(task, newStatus) => {
+        try {
+            await axios.put(`${API_URL}/tasks/${task.id}`, {
+                title: task.title,
+                description: task.description,
+                status: newStatus
+            });
+            fetchTasks();
+        } catch (error) {
+            console.error('Error updating task status:', error);
+        }
+    };
+
+    // Функция для отправки письма
+    const handleSendEmail = async(e) => {
+        e.preventDefault();
+        setEmailStatus(null);
+
+        try {
+            const response = await axios.post(`${API_URL}/email/send`, {
+                recipient_email: recipientEmail,
+                subject: emailSubject,
+                message_body: emailBody,
+                task_id: selectedTaskId
+            });
+
+            if (response.data.success) {
+                setEmailStatus({ type: 'success', message: 'Письмо успешно отправлено!' });
+                // Закрываем форму после успешной отправки
+                setTimeout(() => {
+                    setShowEmailForm(false);
+                    setRecipientEmail('');
+                    setEmailSubject('');
+                    setEmailBody('');
+                    setEmailStatus(null);
+                }, 3000);
+            } else {
+                setEmailStatus({ type: 'error', message: response.data.message });
+            }
+        } catch (error) {
+            console.error('Error sending email:', error);
+            setEmailStatus({
+                type: 'error',
+                message: error.response?.data?.detail || 'Ошибка при отправке письма'
+            });
+        }
+    };
+
+    // Функция для открытия формы отправки письма
+    const openEmailForm = (taskId) => {
+        const task = tasks.find(t => t.id === taskId);
+        setSelectedTaskId(taskId);
+        setEmailSubject(`Информация о задаче: ${task.title}`);
+        setEmailBody(`Задача "${task.title}" находится в статусе "${task.status}".`);
+        setShowEmailForm(true);
+    };
+
+    // Функция для проверки писем
+    const checkEmails = async() => {
+        setLoadingEmails(true);
+        try {
+            const endpoint = emailProtocol === 'imap' ?
+                `${API_URL}/email/check/imap` :
+                `${API_URL}/email/check/pop3`;
+
+            const response = await axios.get(endpoint);
+
+            if (response.data.success) {
+                setEmails(response.data.emails);
+            } else {
+                console.error('Error checking emails:', response.data.message);
+            }
+        } catch (error) {
+            console.error('Error checking emails:', error);
+        } finally {
+            setLoadingEmails(false);
+        }
+    };
+
+    return (
+        <div className="container mx-auto p-4">
+            <h1 className="text-2xl font-bold mb-4">ToDo List</h1>
+
+            <form onSubmit={handleSubmit} className="mb-4">
+                <input 
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Заголовок"
+                    className="border p-2 mr-2"
+                />
+                <input 
+                    type="text"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Описание"
+                    className="border p-2 mr-2"
+                />
+                <button 
+                    type="submit"
+                    className="bg-blue-500 text-white p-2"
+                >
+                    {editingTask ? 'Обновить' : 'Добавить'}
+                </button>
+            </form>
+
+            <table className="w-full mb-6">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Заголовок</th>
+                        <th>Описание</th>
+                        <th>Статус</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {tasks.map(task => (
+                        <tr key={task.id}>
+                            <td>{task.id}</td>
+                            <td>{task.title}</td>
+                            <td>{task.description}</td>
+                            <td>
+                                <select 
+                                    value={task.status}
+                                    onChange={(e) => handleStatusChange(task, e.target.value)}
+                                    className="border p-1"
+                                >
+                                    <option value="pending">Ожидает</option>
+                                    <option value="in-progress">В процессе</option>
+                                    <option value="completed">Завершено</option>
+                                </select>
+                            </td>
+                            <td>
+                                <button 
+                                    onClick={() => handleEdit(task)}
+                                    className="bg-yellow-500 text-white p-1 mr-2"
+                                >
+                                    Редактировать
+                                </button>
+                                <button 
+                                    onClick={() => handleDelete(task.id)}
+                                    className="bg-red-500 text-white p-1 mr-2"
+                                >
+                                    Удалить
+                                </button>
+                                <button 
+                                    onClick={() => openEmailForm(task.id)}
+                                    className="bg-green-500 text-white p-1"
+                                >
+                                    Отправить по e-mail
+                                </button>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+
+            {/* Форма проверки писем */}
+            <div className="mb-6 p-4 border rounded">
+                <h2 className="text-xl font-bold mb-2">Проверка почты</h2>
+                <div className="flex mb-2">
+                    <div className="flex items-center mr-4">
+                        <input 
+                            type="radio"
+                            id="imap"
+                            value="imap"
+                            checked={emailProtocol === 'imap'}
+                            onChange={() => setEmailProtocol('imap')}
+                            className="mr-1"
+                        />
+                        <label htmlFor="imap">IMAP</label>
+                    </div>
+                    <div className="flex items-center">
+                        <input 
+                            type="radio"
+                            id="pop3"
+                            value="pop3"
+                            checked={emailProtocol === 'pop3'}
+                            onChange={() => setEmailProtocol('pop3')}
+                            className="mr-1"
+                        />
+                        <label htmlFor="pop3">POP3</label>
+                    </div>
+                </div>
+                <button 
+                    onClick={checkEmails}
+                    disabled={loadingEmails}
+                    className="bg-blue-500 text-white p-2 mb-4"
+                >
+                    {loadingEmails ? 'Загрузка...' : 'Проверить почту'}
+                </button>
+
+                {emails.length > 0 && (
+                    <div>
+                        <h3 className="font-bold mb-2">Последние 5 писем:</h3>
+                        <ul className="list-disc pl-5">
+                            {emails.map((email, index) => (
+                                <li key={index} className="mb-1">
+                                    <strong>От:</strong> {email.from} | <strong>Тема:</strong> {email.subject} | <strong>Дата:</strong> {email.date}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </div>
+
+            {/* Модальное окно для отправки письма */}
+            {showEmailForm && (
+                <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center">
+                    <div className="bg-white p-6 rounded w-96">
+                        <h2 className="text-xl font-bold mb-4">Отправить письмо</h2>
+
+                        {emailStatus && (
+                            <div className={`p-3 mb-3 rounded ${emailStatus.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                {emailStatus.message}
+                            </div>
+                        )}
+
+                        <form onSubmit={handleSendEmail}>
+                            <div className="mb-3">
+                                <label className="block mb-1">Email получателя:</label>
+                                <input 
+                                    type="email"
+                                    value={recipientEmail}
+                                    onChange={(e) => setRecipientEmail(e.target.value)}
+                                    className="border p-2 w-full"
+                                    required
+                                />
+                            </div>
+
+                            <div className="mb-3">
+                                <label className="block mb-1">Тема:</label>
+                                <input 
+                                    type="text"
+                                    value={emailSubject}
+                                    onChange={(e) => setEmailSubject(e.target.value)}
+                                    className="border p-2 w-full"
+                                    required
+                                />
+                            </div>
+
+                            <div className="mb-3">
+                                <label className="block mb-1">Сообщение:</label>
+                                <textarea 
+                                    value={emailBody}
+                                    onChange={(e) => setEmailBody(e.target.value)}
+                                    className="border p-2 w-full h-24"
+                                    required
+                                ></textarea>
+                            </div>
+
+                            <div className="flex justify-end">
+                                <button 
+                                    type="button"
+                                    onClick={() => setShowEmailForm(false)}
+                                    className="bg-gray-500 text-white p-2 mr-2"
+                                >
+                                    Отмена
+                                </button>
+                                <button 
+                                    type="submit"
+                                    className="bg-blue-500 text-white p-2"
+                                    disabled={emailStatus?.type === 'success'}
+                                >
+                                    Отправить
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export default App; 

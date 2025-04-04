@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Запускается при создании тега, начинающегося с 'v'
+
+jobs:
+  create-release:
+    runs-on: windows-latest
+    
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      VERSION: ${GITHUB_REF#refs/tags/}
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      # Получение версии из тега
+      - name: Get version
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      
+      # Сборка и пуш образов с версией
+      - name: Build and push Docker images
+        shell: pwsh
+        run: |
+          # Сборка с тегами версий
+          docker build -t $env:DOCKER_USERNAME/todo-backend:$env:VERSION -t $env:DOCKER_USERNAME/todo-backend:latest ./backend
+          docker build -t $env:DOCKER_USERNAME/todo-frontend:$env:VERSION -t $env:DOCKER_USERNAME/todo-frontend:latest ./frontend
+          docker build -t $env:DOCKER_USERNAME/todo-database:$env:VERSION -t $env:DOCKER_USERNAME/todo-database:latest ./database
+          
+          # Логин в Docker Hub
+          docker login -u $env:DOCKER_USERNAME -p $env:DOCKER_PASSWORD
+          
+          # Пуш образов с версиями
+          docker push $env:DOCKER_USERNAME/todo-backend:$env:VERSION
+          docker push $env:DOCKER_USERNAME/todo-backend:latest
+          docker push $env:DOCKER_USERNAME/todo-frontend:$env:VERSION
+          docker push $env:DOCKER_USERNAME/todo-frontend:latest
+          docker push $env:DOCKER_USERNAME/todo-database:$env:VERSION
+          docker push $env:DOCKER_USERNAME/todo-database:latest
+      
+      # Создание GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ env.VERSION }}
+          body: |
+            ## Docker Images
+            
+            - Backend: `${{ env.DOCKER_USERNAME }}/todo-backend:${{ env.VERSION }}`
+            - Frontend: `${{ env.DOCKER_USERNAME }}/todo-frontend:${{ env.VERSION }}`
+            - Database: `${{ env.DOCKER_USERNAME }}/todo-database:${{ env.VERSION }}`
+            
+            ## How to use
+            
+            ```bash
+            # Pull images
+            docker pull ${{ env.DOCKER_USERNAME }}/todo-backend:${{ env.VERSION }}
+            docker pull ${{ env.DOCKER_USERNAME }}/todo-frontend:${{ env.VERSION }}
+            docker pull ${{ env.DOCKER_USERNAME }}/todo-database:${{ env.VERSION }}
+            
+            # Create network
+            docker network create todo-network
+            
+            # Run containers
+            docker run -d --name todo-db --network todo-network -p 5432:5432 ${{ env.DOCKER_USERNAME }}/todo-database:${{ env.VERSION }}
+            docker run -d --name todo-backend --network todo-network -p 8000:8000 -e "DATABASE_URL=postgresql://admin:admin123@todo-db:5432/tododb" ${{ env.DOCKER_USERNAME }}/todo-backend:${{ env.VERSION }}
+            docker run -d --name todo-frontend --network todo-network -p 3000:3000 -e "REACT_APP_API_URL=http://localhost:8000" ${{ env.DOCKER_USERNAME }}/todo-frontend:${{ env.VERSION }}
+            ```
+          draft: false
+          prerelease: false 
