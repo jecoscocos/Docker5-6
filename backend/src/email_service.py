@@ -1,239 +1,132 @@
-import aiosmtplib
+import os
 import email
+import poplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import imapclient
-import poplib
-import os
-from dotenv import load_dotenv
-import asyncio
 
-# Загружаем переменные окружения
+import aiosmtplib
+from imapclient import IMAPClient
+from dotenv import load_dotenv
+
 load_dotenv()
 
-# Получаем настройки почты из переменных окружения
-EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USER = os.getenv('EMAIL_USER')
-EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
-IMAP_HOST = os.getenv('IMAP_HOST')
-IMAP_PORT = int(os.getenv('IMAP_PORT', 993))
-POP3_HOST = os.getenv('POP3_HOST')
-POP3_PORT = int(os.getenv('POP3_PORT', 995))
-IMAP_USER = os.getenv('IMAP_USER')
-IMAP_PASSWORD = os.getenv('IMAP_PASSWORD')
-POP3_USER = os.getenv('POP3_USER')
-POP3_PASSWORD = os.getenv('POP3_PASSWORD')
+# Email configuration
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_USERNAME = os.getenv('SMTP_USERNAME', '')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
 
+POP3_SERVER = os.getenv('POP3_SERVER', 'pop.gmail.com')
+POP3_PORT = int(os.getenv('POP3_PORT', '995'))
+POP3_USERNAME = os.getenv('POP3_USERNAME', '')
+POP3_PASSWORD = os.getenv('POP3_PASSWORD', '')
 
-async def send_email_smtp(recipient_email, subject, message_body, task_details):
+IMAP_SERVER = os.getenv('IMAP_SERVER', 'imap.gmail.com')
+IMAP_USERNAME = os.getenv('IMAP_USERNAME', '')
+IMAP_PASSWORD = os.getenv('IMAP_PASSWORD', '')
+
+async def send_email_smtp(recipient_email: str, subject: str, message_body: str) -> dict:
     """
-    Отправка электронной почты через SMTP протокол
+    Send email using SMTP protocol.
     """
-    # Создаем сообщение
-    message = MIMEMultipart()
-    message["From"] = EMAIL_USER
-    message["To"] = recipient_email
-    message["Subject"] = subject
-    
-    # Добавляем информацию о задаче в тело письма
-    task_info = f"""
-    Детали задачи:
-    ID: {task_details.get('id', 'N/A')}
-    Заголовок: {task_details.get('title', 'N/A')}
-    Описание: {task_details.get('description', 'N/A')}
-    Статус: {task_details.get('status', 'N/A')}
-    """
-    
-    # Формируем полное тело письма
-    full_body = f"{message_body}\n\n{task_info}"
-    message.attach(MIMEText(full_body, "plain"))
-    
     try:
-        # Устанавливаем соединение с сервером
-        if EMAIL_PORT == 465:
-            # Для порта 465 используем SSL с самого начала
-            smtp = aiosmtplib.SMTP(hostname=EMAIL_HOST, port=EMAIL_PORT, use_tls=True)
-            await smtp.connect()
-        else:
-            # Для порта 587 сначала подключаемся, затем включаем TLS
-            smtp = aiosmtplib.SMTP(hostname=EMAIL_HOST, port=EMAIL_PORT)
-            await smtp.connect()
-            await smtp.starttls()
-        
-        # Авторизуемся на сервере
-        await smtp.login(EMAIL_USER, EMAIL_PASSWORD)
-        
-        # Отправляем письмо
-        await smtp.send_message(message)
-        
-        # Закрываем соединение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USERNAME
+        msg['To'] = recipient_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(message_body, 'plain'))
+
+        smtp = aiosmtplib.SMTP(hostname=SMTP_SERVER, port=SMTP_PORT, use_tls=True)
+        await smtp.connect()
+        await smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        await smtp.send_message(msg)
         await smtp.quit()
-        
+
         return {"success": True, "message": "Email sent successfully"}
+    except aiosmtplib.SMTPException as e:
+        return {"success": False, "message": f"SMTP error: {str(e)}"}
     except Exception as e:
-        return {"success": False, "message": f"Failed to send email: {str(e)}"}
+        return {"success": False, "message": f"Error sending email: {str(e)}"}
 
-
-def check_emails_imap():
+def check_emails_pop3() -> dict:
     """
-    Проверка электронной почты через IMAP протокол
-    Возвращает последние 5 писем из папки "Входящие"
+    Check emails using POP3 protocol.
     """
     try:
-        print(f"Начинаю подключение к IMAP-серверу: {IMAP_HOST}:{IMAP_PORT}")
-        # Подключаемся к серверу IMAP
-        client = imapclient.IMAPClient(IMAP_HOST, port=IMAP_PORT, ssl=True)
-        print(f"Пытаюсь залогиниться как {IMAP_USER}")
-        client.login(IMAP_USER, IMAP_PASSWORD)
-        print("Успешно залогинился в IMAP")
-        
-        # Выбираем папку "Входящие"
-        client.select_folder('INBOX')
-        
-        # Ищем все письма
-        messages = client.search(['ALL'])
-        print(f"Найдено писем: {len(messages)}")
-        
-        # Получаем последние 5 писем (или меньше, если их меньше 5)
-        last_emails = []
-        messages_to_fetch = messages[-5:] if len(messages) > 0 else []
-        print(f"Получаю последние {len(messages_to_fetch)} писем")
-        
-        for msg_id in messages_to_fetch:
-            # Получаем заголовки писем
-            fetched = client.fetch([msg_id], ['ENVELOPE'])
-            envelope = fetched[msg_id][b'ENVELOPE']
-            
-            sender = ""
-            if envelope.from_:
-                if envelope.from_[0].mailbox and envelope.from_[0].host:
-                    sender = f"{envelope.from_[0].mailbox.decode()}@{envelope.from_[0].host.decode()}"
-            
-            subject = envelope.subject.decode() if envelope.subject else "No Subject"
-            
-            # Обработка даты
-            date_str = "No Date"
-            if envelope.date:
-                if isinstance(envelope.date, bytes):
-                    date_str = envelope.date.decode()
-                elif hasattr(envelope.date, 'strftime'):
-                    date_str = envelope.date.strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    date_str = str(envelope.date)
-            
-            print(f"Добавляю письмо: От: {sender}, Тема: {subject}")
-            
-            # Добавляем информацию о письме
-            last_emails.append({
-                "from": sender,
-                "subject": subject,
-                "date": date_str
+        server = poplib.POP3_SSL(POP3_SERVER, POP3_PORT)
+        server.user(POP3_USERNAME)
+        server.pass_(POP3_PASSWORD)
+
+        num_messages = len(server.list()[1])
+        emails = []
+
+        for i in range(num_messages):
+            lines = server.retr(i + 1)[1]
+            msg_content = b'\n'.join(lines).decode('utf-8')
+            msg = email.message_from_string(msg_content)
+
+            subject = msg.get('Subject', '')
+            from_address = msg.get('From', '')
+            date = msg.get('Date', '')
+
+            body = ''
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == 'text/plain':
+                        body = part.get_payload(decode=True).decode()
+                        break
+            else:
+                body = msg.get_payload(decode=True).decode()
+
+            emails.append({
+                'subject': subject,
+                'from': from_address,
+                'date': date,
+                'body': body
             })
-        
-        # Закрываем соединение
-        client.logout()
-        print(f"Успешно получено {len(last_emails)} писем через IMAP")
-        
-        return {"success": True, "emails": last_emails}
+
+        server.quit()
+        return {"success": True, "emails": emails}
+    except poplib.error_proto as e:
+        return {"success": False, "message": f"POP3 protocol error: {str(e)}"}
     except Exception as e:
-        print(f"Ошибка при проверке почты через IMAP: {str(e)}")
-        return {"success": False, "message": f"Failed to check emails via IMAP: {str(e)}"}
+        return {"success": False, "message": f"Error checking emails: {str(e)}"}
 
-
-def check_emails_pop3():
+def check_emails_imap() -> dict:
     """
-    Проверка электронной почты через POP3 протокол
-    Возвращает последние 5 писем
+    Check emails using IMAP protocol.
     """
     try:
-        print(f"Начинаю подключение к POP3-серверу: {POP3_HOST}:{POP3_PORT}")
-        # Подключаемся к серверу POP3
-        mail = poplib.POP3_SSL(POP3_HOST, POP3_PORT)
-        print(f"Пытаюсь залогиниться как {POP3_USER}")
-        mail.user(POP3_USER)
-        mail.pass_(POP3_PASSWORD)
-        print("Успешно залогинился в POP3")
-        
-        # Получаем статистику почтового ящика
-        mail_count = len(mail.list()[1])
-        print(f"Количество писем в ящике: {mail_count}")
-        
-        # Получаем последние 5 писем (или меньше, если их меньше 5)
-        last_emails = []
-        start_index = max(1, mail_count - 4)
-        print(f"Получаю письма с {start_index} по {mail_count}")
-        
-        for i in range(start_index, mail_count + 1):
-            try:
-                # Получаем письмо (заголовки + 1 строка тела)
-                resp, lines, _ = mail.retr(i)
-                
-                # Объединяем строки письма
-                msg_content = b'\n'.join(lines)
-                
-                # Парсим сообщение
-                msg = email.message_from_bytes(msg_content)
-                
-                from_addr = msg.get("From", "No Sender")
-                subject = msg.get("Subject", "No Subject")
-                date = msg.get("Date", "No Date")
-                print(f"Добавляю письмо: От: {from_addr}, Тема: {subject}")
-                
-                # Добавляем информацию о письме
-                last_emails.append({
-                    "from": from_addr,
-                    "subject": subject,
-                    "date": date
-                })
-            except Exception as inner_e:
-                print(f"Ошибка при получении письма {i}: {str(inner_e)}")
-        
-        # Закрываем соединение
-        mail.quit()
-        print(f"Успешно получено {len(last_emails)} писем через POP3")
-        
-        # Если не удалось получить письма, добавляем тестовые данные
-        if len(last_emails) == 0:
-            print("Писем по POP3 не найдено, добавляем тестовые данные")
-            last_emails = [
-                {
-                    "from": "test1@example.com",
-                    "subject": "Тестовое письмо POP3 1",
-                    "date": "2023-03-24"
-                },
-                {
-                    "from": "test2@example.com",
-                    "subject": "Тестовое письмо POP3 2",
-                    "date": "2023-03-23"
-                },
-                {
-                    "from": "test3@example.com",
-                    "subject": "Тестовое письмо POP3 3",
-                    "date": "2023-03-22"
-                }
-            ]
-        
-        return {"success": True, "emails": last_emails}
+        server = IMAPClient(IMAP_SERVER, use_uid=True, ssl=True)
+        server.login(IMAP_USERNAME, IMAP_PASSWORD)
+        server.select_folder('INBOX')
+
+        messages = server.search(['ALL'])
+        emails = []
+
+        for uid, message_data in server.fetch(messages, ['ENVELOPE', 'BODY[]']).items():
+            envelope = message_data[b'ENVELOPE']
+            body = message_data[b'BODY[]']
+
+            msg = email.message_from_bytes(body)
+            body_content = ''
+
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == 'text/plain':
+                        body_content = part.get_payload(decode=True).decode()
+                        break
+            else:
+                body_content = msg.get_payload(decode=True).decode()
+
+            emails.append({
+                'subject': envelope.subject.decode() if envelope.subject else '',
+                'from': str(envelope.from_[0]) if envelope.from_ else '',
+                'date': envelope.date.decode() if envelope.date else '',
+                'body': body_content
+            })
+
+        server.logout()
+        return {"success": True, "emails": emails}
     except Exception as e:
-        print(f"Ошибка при проверке почты через POP3: {str(e)}")
-        # В случае ошибки возвращаем тестовые данные
-        print("Ошибка POP3, возвращаем тестовые данные")
-        test_emails = [
-            {
-                "from": "support@example.com",
-                "subject": "Тестовое сообщение POP3 1",
-                "date": "2023-03-24"
-            },
-            {
-                "from": "notifications@example.com",
-                "subject": "Тестовое сообщение POP3 2",
-                "date": "2023-03-23"
-            },
-            {
-                "from": "info@example.com",
-                "subject": "Тестовое сообщение POP3 3",
-                "date": "2023-03-22"
-            }
-        ]
-        return {"success": True, "emails": test_emails} 
+        return {"success": False, "message": f"Error checking IMAP emails: {str(e)}"} 
