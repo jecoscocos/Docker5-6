@@ -104,7 +104,7 @@ def check_emails_imap() -> dict:
         messages = server.search(['ALL'])
         emails = []
 
-        for uid, message_data in server.fetch(messages, ['ENVELOPE', 'BODY[]']).items():
+        for message_data in server.fetch(messages, ['ENVELOPE', 'BODY[]']).values():
             envelope = message_data[b'ENVELOPE']
             body = message_data[b'BODY[]']
 

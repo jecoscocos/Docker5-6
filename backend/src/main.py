@@ -1,5 +1,4 @@
 import os
-import typing
 from datetime import datetime
 from typing import List, Optional
 
@@ -11,11 +10,24 @@ import psycopg2.extras
 
 from email_service import send_email_smtp, check_emails_pop3, check_emails_imap
 
+# Create FastAPI app
+app = FastAPI()
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
 # Database configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://admin:admin123@localhost:5432/tododb')
 
 
 class ConnectionManager:
+    """WebSocket connection manager."""
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
@@ -48,12 +60,14 @@ def get_db_connection():
 
 
 class Task(BaseModel):
+    """Task model."""
     title: str
     description: str
     status: str
 
 
 class EmailRequest(BaseModel):
+    """Email request model."""
     recipient_email: str
     subject: str
     message_body: str
@@ -62,6 +76,7 @@ class EmailRequest(BaseModel):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates."""
     await manager.connect(websocket)
     try:
         while True:
@@ -208,7 +223,8 @@ async def send_email(email_request: EmailRequest):
             conn.close()
 
             if task:
-                email_request.message_body += f"\n\nTask Details:\nTitle: {task['title']}\nDescription: {task['description']}\nStatus: {task['status']}"
+                task_details = f"\n\nTask Details:\nTitle: {task['title']}\nDescription: {task['description']}\nStatus: {task['status']}"
+                email_request.message_body += task_details
 
         result = await send_email_smtp(
             email_request.recipient_email,
@@ -237,15 +253,4 @@ async def check_imap_emails():
         result = check_emails_imap()
         return result
     except Exception as e:
-        return {"success": False, "message": str(e)}
-
-
-# CORS configuration
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-) 
+        return {"success": False, "message": str(e)} 
